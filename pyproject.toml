@@ -1,0 +1,11 @@
+[project]
+name = "servicenow-docs-rag"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+  "sentence-transformers>=3.0",
+  "chromadb>=0.5",
+  "mcp>=1.0",
+  "tiktoken>=0.7",
+  "python-frontmatter>=1.1",
+]
