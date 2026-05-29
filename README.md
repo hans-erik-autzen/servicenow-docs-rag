@@ -20,7 +20,7 @@ Gives Claude Desktop (or any MCP-compatible client) two tools:
 Clone the repo anywhere you like, then run `install.sh` from that location:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/servicenow-docs-rag
+git clone https://github.com/hans-erik-autzen/servicenow-docs-rag
 cd servicenow-docs-rag
 chmod +x install.sh
 ./install.sh
