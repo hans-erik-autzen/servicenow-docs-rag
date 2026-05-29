@@ -147,7 +147,8 @@ def main() -> None:
         try:
             post = frontmatter.load(str(file_path))
             content = post.content
-        except Exception:
+        except Exception as e:
+            errors.append(f"{rel_str}: frontmatter parse failed ({e}), using raw text")
             content = file_path.read_text(errors="replace")
 
         product_area = infer_product_area(file_path)

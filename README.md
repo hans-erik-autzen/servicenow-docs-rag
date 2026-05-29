@@ -82,3 +82,13 @@ servicenow-docs-rag/
 **Indexing** (`chunk_and_index.py`): splits markdown files on heading boundaries, embeds each chunk with [`all-MiniLM-L6-v2`](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) via sentence-transformers, and upserts into a local ChromaDB collection. md5 hashing ensures unchanged files are skipped on re-runs.
 
 **Serving** (`snow_docs_mcp.py`): loads ChromaDB and the embedding model lazily on first query, then serves semantic search and raw file retrieval via [FastMCP](https://github.com/jlowin/fastmcp).
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `FileNotFoundError: ../servicenow-docs/` | Sibling docs repo not cloned | Run `./install.sh` or manually clone `ServiceNow/ServiceNowDocs` next to this repo |
+| Search returns 0 results | Index not built yet | Run `uv run python scripts/chunk_and_index.py` |
+| MCP server not visible in Claude Desktop | Config not copied or path is wrong | Re-run `./install.sh`, then copy the printed JSON block into `claude_desktop_config.json` and restart Claude Desktop |
+| `ModuleNotFoundError` on any import | Dependencies not installed | Run `uv sync` |
+| First query is very slow | Embedding model downloads on first use | Expected — model is cached after that; subsequent queries are fast |
