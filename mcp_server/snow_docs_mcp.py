@@ -13,8 +13,9 @@ import chromadb
 from mcp.server.fastmcp import FastMCP
 from sentence_transformers import SentenceTransformer
 
-CHROMA_PATH = Path.home() / "servicenow-docs-rag" / "chroma_db"
-DOCS_ROOT = Path.home() / "servicenow-docs"
+_REPO_ROOT = Path(__file__).parent.parent.resolve()
+CHROMA_PATH = _REPO_ROOT / "chroma_db"
+DOCS_ROOT = _REPO_ROOT.parent / "servicenow-docs"
 COLLECTION_NAME = "snow_docs"
 
 mcp = FastMCP("servicenow-docs")

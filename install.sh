@@ -1,20 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_DIR="$HOME/servicenow-docs-rag"
-DOCS_DIR="$HOME/servicenow-docs"
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+DOCS_DIR="$(dirname "$REPO_DIR")/servicenow-docs"
 DOCS_REPO="https://github.com/ServiceNow/ServiceNowDocs"
 DOCS_BRANCH="australia"
-
-# Verify the repo was cloned to the expected location
-if [[ "$(pwd)" != "$REPO_DIR" ]]; then
-  echo "Error: This script must be run from $REPO_DIR"
-  echo ""
-  echo "Clone the repo to the correct location first:"
-  echo "  git clone https://github.com/YOUR_USERNAME/servicenow-docs-rag $REPO_DIR"
-  echo "  cd $REPO_DIR && ./install.sh"
-  exit 1
-fi
 
 # Install uv if missing
 if ! command -v uv &>/dev/null; then
@@ -45,16 +35,9 @@ echo "(First run takes 10–30 minutes depending on your machine)"
 echo ""
 uv run python scripts/chunk_and_index.py
 
-# Print MCP config
-cat <<EOF
-
-===================================================
- Setup complete! Add this to your Claude Desktop
- config and restart Claude Desktop.
-===================================================
-
-Config file: ~/Library/Application Support/Claude/claude_desktop_config.json
-
+# Write MCP config to file
+MCP_CONFIG_FILE="$REPO_DIR/mcp_config.json"
+cat > "$MCP_CONFIG_FILE" <<EOF
 {
   "mcpServers": {
     "servicenow-docs": {
@@ -69,7 +52,22 @@ Config file: ~/Library/Application Support/Claude/claude_desktop_config.json
     }
   }
 }
+EOF
 
-If you already have other mcpServers entries, add only the
-"servicenow-docs" key inside the existing mcpServers object.
+cat <<EOF
+
+===================================================
+ Setup complete!
+===================================================
+
+MCP config written to:
+  $MCP_CONFIG_FILE
+
+Copy its contents into:
+  ~/Library/Application Support/Claude/claude_desktop_config.json
+
+If you already have other mcpServers entries, merge only the
+"servicenow-docs" key into the existing mcpServers object.
+
+Then restart Claude Desktop.
 EOF

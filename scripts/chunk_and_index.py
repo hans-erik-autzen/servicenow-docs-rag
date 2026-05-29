@@ -16,8 +16,9 @@ import frontmatter
 import tiktoken
 from sentence_transformers import SentenceTransformer
 
-DOCS_ROOT = Path.home() / "servicenow-docs" / "markdown"
-CHROMA_PATH = Path.home() / "servicenow-docs-rag" / "chroma_db"
+_REPO_ROOT = Path(__file__).parent.parent.resolve()
+DOCS_ROOT = _REPO_ROOT.parent / "servicenow-docs" / "markdown"
+CHROMA_PATH = _REPO_ROOT / "chroma_db"
 COLLECTION_NAME = "snow_docs"
 GITHUB_BASE = "https://github.com/ServiceNow/ServiceNowDocs/blob/australia"
 RELEASE_FAMILY = "australia"
@@ -36,7 +37,7 @@ def infer_product_area(path: Path) -> str:
 
 
 def build_source_url(path: Path) -> str:
-    rel = path.relative_to(Path.home() / "servicenow-docs")
+    rel = path.relative_to(_REPO_ROOT.parent / "servicenow-docs")
     return f"{GITHUB_BASE}/{rel}"
 
 
@@ -103,7 +104,7 @@ def split_on_blank_lines(text: str, max_tokens: int) -> list[str]:
 
 
 def make_chunk_id(path: Path, index: int) -> str:
-    rel = str(path.relative_to(Path.home() / "servicenow-docs"))
+    rel = str(path.relative_to(_REPO_ROOT.parent / "servicenow-docs"))
     return hashlib.md5(f"{rel}::{index}".encode()).hexdigest()
 
 
@@ -136,7 +137,7 @@ def main() -> None:
     errors: list[str] = []
 
     for file_path in md_files:
-        rel_str = str(file_path.relative_to(Path.home() / "servicenow-docs"))
+        rel_str = str(file_path.relative_to(_REPO_ROOT.parent / "servicenow-docs"))
         current_hash = file_md5(file_path)
 
         if hash_registry.get(rel_str) == current_hash:

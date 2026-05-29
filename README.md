@@ -17,11 +17,11 @@ Gives Claude Desktop (or any MCP-compatible client) two tools:
 
 ## Install
 
-The repo must be cloned to `~/servicenow-docs-rag` — the MCP server uses that path.
+Clone the repo anywhere you like, then run `install.sh` from that location:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/servicenow-docs-rag ~/servicenow-docs-rag
-cd ~/servicenow-docs-rag
+git clone https://github.com/YOUR_USERNAME/servicenow-docs-rag
+cd servicenow-docs-rag
 chmod +x install.sh
 ./install.sh
 ```
@@ -29,37 +29,27 @@ chmod +x install.sh
 `install.sh` will:
 
 1. Install `uv` if not already present
-2. Clone the ServiceNow docs (`australia` release branch) to `~/servicenow-docs`
+2. Clone the ServiceNow docs (`australia` release branch) as a **sibling directory** next to this repo
 3. Install Python dependencies via `uv sync`
 4. Build the ChromaDB vector index — **10–30 minutes on first run**
-5. Print the MCP config block to add to Claude Desktop
+5. Write the MCP config block to `mcp_config.json` in the repo root
+
+> **Path constraint:** Both repos must be siblings — i.e. in the same parent directory. The folder names
+> `servicenow-docs-rag` and `servicenow-docs` must stay as-is. If you need to customise either name,
+> an environment variable or config file approach would be required.
 
 ## MCP Configuration
 
-After `install.sh` completes, add the printed config block to:
+After `install.sh` completes, it writes a ready-to-use `mcp_config.json` to the repo root with the correct absolute paths for your machine.
 
-```
-~/Library/Application Support/Claude/claude_desktop_config.json
-```
+Copy its contents into your Claude Desktop config file:
 
-```json
-{
-  "mcpServers": {
-    "servicenow-docs": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--project",
-        "/Users/YOUR_USERNAME/servicenow-docs-rag",
-        "python",
-        "/Users/YOUR_USERNAME/servicenow-docs-rag/mcp_server/snow_docs_mcp.py"
-      ]
-    }
-  }
-}
-```
+| OS | Config file path |
+|----|-----------------|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
 
-`install.sh` prints this block with the correct paths filled in for your machine — copy it directly from there.
+If you already have other `mcpServers` entries, merge only the `"servicenow-docs"` key into the existing object.
 
 Restart Claude Desktop after saving. The `servicenow-docs` tools will appear automatically.
 
@@ -68,7 +58,7 @@ Restart Claude Desktop after saving. The `servicenow-docs` tools will appear aut
 Pull the latest docs and re-index only changed files:
 
 ```bash
-cd ~/servicenow-docs-rag && ./scripts/sync_and_reindex.sh
+cd /path/to/servicenow-docs-rag && ./scripts/sync_and_reindex.sh
 ```
 
 Unchanged files are skipped via md5 hashing, so subsequent runs are much faster than the initial index.
