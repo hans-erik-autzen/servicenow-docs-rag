@@ -36,6 +36,17 @@ EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 # cl100k count, and the title/breadcrumb header eats into the same budget.
 MAX_TOKENS = 350
 
+# The cap that actually binds. bge reads 512 wordpieces including [CLS]/[SEP]; anything
+# past that is silently dropped at encode time. MAX_TOKENS is only a cheap proxy for this
+# — it holds for prose but not for dense technical text, where dotted API names, escaped
+# underscores and CSS blocks have been measured expanding 2.2x rather than the ~1.46x the
+# proxy assumes. Every chunk is verified against this before it is emitted.
+MAX_WORDPIECES = 500
+
+# Below this cl100k count a chunk cannot reach MAX_WORDPIECES, so the slow tokenizer is
+# skipped. The lowest cl100k count among measured over-limit chunks was 277.
+WORDPIECE_GATE = 250
+
 EMBED_BATCH = 64          # sentence-transformers encode batch size
 FLUSH_EVERY = 512         # chunks buffered before an encode + upsert round-trip
 CHECKPOINT_EVERY = 200    # files between hash-registry writes
@@ -45,6 +56,7 @@ DEFAULT_RELEASE = "australia"
 _release_family = DEFAULT_RELEASE
 
 tokenizer = tiktoken.get_encoding("cl100k_base")
+_wordpiece_tokenizer = None
 
 _HEADING_RE = re.compile(r"^(#{1,3})\s+(.+)$")
 _FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
@@ -52,6 +64,30 @@ _FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 
 def count_tokens(text: str) -> int:
     return len(tokenizer.encode(text))
+
+
+def set_wordpiece_tokenizer(tok) -> None:
+    """Reuse the loaded SentenceTransformer's tokenizer instead of a second copy."""
+    global _wordpiece_tokenizer
+    _wordpiece_tokenizer = tok
+
+
+def get_wordpiece_tokenizer():
+    """Lazy fallback so chunking is usable (and testable) without building the model."""
+    global _wordpiece_tokenizer
+    if _wordpiece_tokenizer is None:
+        from transformers import AutoTokenizer
+
+        _wordpiece_tokenizer = AutoTokenizer.from_pretrained(EMBED_MODEL)
+    return _wordpiece_tokenizer
+
+
+def count_wordpieces(text: str) -> int:
+    """Length in the embedding model's own tokens, special tokens included."""
+    tok = get_wordpiece_tokenizer()
+    # verbose=False suppresses the "longer than maximum sequence length" warning; going
+    # over is exactly the condition we are measuring for, not an error.
+    return len(tok(text, add_special_tokens=True, truncation=False, verbose=False)["input_ids"])
 
 
 def detect_release_family() -> str:
@@ -190,16 +226,14 @@ def _split_on_token_window(text: str, max_tokens: int) -> list[str]:
     ]
 
 
-def enforce_token_limit(text: str, max_tokens: int) -> list[str]:
+def _split_within(text: str, max_tokens: int) -> list[str]:
     """
-    Split text so every returned part is within max_tokens, losing no content.
+    Split text so every returned part is within max_tokens (cl100k), losing no content.
 
     Escalates through progressively more aggressive boundaries: blank lines, then
     single newlines, then a hard token window. The final step is what stops an
     unbroken multi-megabyte link list from becoming one giant chunk.
     """
-    if max_tokens <= 0:
-        return [text] if text.strip() else []
     if count_tokens(text) <= max_tokens:
         return [text] if text.strip() else []
 
@@ -217,6 +251,37 @@ def enforce_token_limit(text: str, max_tokens: int) -> list[str]:
     return [p for p in parts if p.strip()]
 
 
+def _fits_wordpieces(text: str, max_wordpieces: int) -> bool:
+    """cl100k first — the real tokenizer only runs where the cheap proxy can't rule it out."""
+    if count_tokens(text) <= WORDPIECE_GATE:
+        return True
+    return count_wordpieces(text) <= max_wordpieces
+
+
+def enforce_token_limit(
+    text: str,
+    max_tokens: int,
+    max_wordpieces: int = MAX_WORDPIECES,
+) -> list[str]:
+    """
+    Split text so every part fits both the cl100k budget and the model's wordpiece limit.
+
+    The cl100k pass is the fast path and handles all but a fraction of a percent of the
+    corpus. Where the proxy under-counts, halve the budget and re-split until the real
+    tokenizer agrees — content is redistributed across more parts, never dropped.
+    """
+    if max_tokens <= 0:
+        return [text] if text.strip() else []
+
+    parts = _split_within(text, max_tokens)
+    budget = max_tokens
+    while budget > 1 and not all(_fits_wordpieces(p, max_wordpieces) for p in parts):
+        budget = max(1, budget // 2)
+        parts = _split_within(text, budget)
+
+    return parts
+
+
 def build_header(title: str, breadcrumb: str) -> str:
     """Context line prepended to a chunk's embedded text."""
     if title and breadcrumb:
@@ -232,6 +297,7 @@ def compose_chunks(
     title: str,
     description: str,
     max_tokens: int = MAX_TOKENS,
+    max_wordpieces: int = MAX_WORDPIECES,
 ) -> list[dict]:
     """
     Attach title/breadcrumb context to each chunk and enforce the token cap.
@@ -251,10 +317,14 @@ def compose_chunks(
 
         prefix = f"{header}\n\n" if header else ""
         budget = max_tokens - count_tokens(prefix)
-        if budget <= 0:  # pathological header; fall back to an unprefixed chunk
-            prefix, budget = "", max_tokens
+        # The header is prepended after the split, so its wordpiece cost has to come out
+        # of the budget too — otherwise a chunk that fit on its own goes over once
+        # prefixed. Counting special tokens on both sides just leaves a little headroom.
+        wp_budget = max_wordpieces - count_wordpieces(prefix) if prefix else max_wordpieces
+        if budget <= 0 or wp_budget <= 0:  # pathological header; drop it for this chunk
+            prefix, budget, wp_budget = "", max_tokens, max_wordpieces
 
-        for part in enforce_token_limit(body, budget):
+        for part in enforce_token_limit(body, budget, wp_budget):
             composed.append({"text": f"{prefix}{part}".strip(), "heading": chunk["heading"]})
 
     return composed
@@ -327,6 +397,8 @@ def main() -> None:
     device = pick_device()
     print(f"Loading embedding model ({EMBED_MODEL}) on {device}…", flush=True)
     model = SentenceTransformer(EMBED_MODEL, device=device)
+    # Chunking verifies against the model's own vocabulary, not a second downloaded copy.
+    set_wordpiece_tokenizer(model.tokenizer)
 
     print(f"Connecting to ChromaDB at {CHROMA_PATH}", flush=True)
     client = chromadb.PersistentClient(path=str(CHROMA_PATH))

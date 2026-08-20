@@ -5,16 +5,19 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from chunk_and_index import (
     MAX_TOKENS,
+    MAX_WORDPIECES,
     _REPO_ROOT,
     build_header,
     compose_chunks,
     count_tokens,
+    count_wordpieces,
     enforce_token_limit,
     infer_product_area,
     make_chunk_id,
     split_by_headings,
     split_on_blank_lines,
     parse_frontmatter_loosely,
+    _split_within,
 )
 
 _DOCS_ROOT = _REPO_ROOT.parent / "servicenow-docs"
@@ -146,6 +149,58 @@ class TestEnforceTokenLimit:
         text = "\n".join(f"- link {i}" for i in range(500))
         for part in enforce_token_limit(text, 60):
             assert count_tokens(part) <= 60
+
+
+# Dense technical text of the shape that broke the cl100k proxy in the real corpus:
+# dotted API names, escaped underscores and CSS. Measured at ~2.2x wordpiece expansion
+# versus the ~1.46x the MAX_TOKENS budget assumes.
+_HIGH_EXPANSION = (
+    "GlideRecord.addEncodedQuery\\_sys\\_id=javascript:gs.getUserID() "
+    ".navpage\\_header\\_bar{background-color:#2e3d4f;border-bottom:1px solid #cfd5db;} "
+)
+
+
+class TestCountWordpieces:
+    def test_counts_more_than_zero(self):
+        assert count_wordpieces("hello world") > 0
+
+    def test_high_expansion_text_outruns_cl100k(self):
+        text = _HIGH_EXPANSION * 12
+        # This is the whole reason the proxy alone was not enough.
+        assert count_wordpieces(text) > count_tokens(text)
+
+
+class TestWordpieceEnforcement:
+    def test_high_expansion_chunk_split_to_fit_model_limit(self):
+        text = _HIGH_EXPANSION * 40
+        parts = enforce_token_limit(text, MAX_TOKENS)
+        assert len(parts) > 1
+        for part in parts:
+            assert count_wordpieces(part) <= MAX_WORDPIECES
+
+    def test_no_content_lost_when_wordpiece_splitting(self):
+        text = _HIGH_EXPANSION * 40
+        rejoined = "".join(enforce_token_limit(text, MAX_TOKENS))
+        assert rejoined.count("addEncodedQuery") == text.count("addEncodedQuery")
+
+    def test_ordinary_prose_takes_the_fast_path_unchanged(self):
+        # The wordpiece pass must not re-split text the cl100k budget already handled.
+        text = "\n\n".join(["This is an ordinary sentence of documentation prose. " * 8] * 6)
+        assert enforce_token_limit(text, 200) == _split_within(text, 200)
+
+    def test_composed_chunks_respect_the_model_limit(self):
+        raw = [{"text": _HIGH_EXPANSION * 40, "heading": "H1 > H2"}]
+        out = compose_chunks(raw, "Doc", "")
+        assert out
+        for chunk in out:
+            assert count_wordpieces(chunk["text"]) <= MAX_WORDPIECES
+
+    def test_long_header_counted_against_the_wordpiece_budget(self):
+        # A heavy breadcrumb eats budget the body split would otherwise have used.
+        heading = " > ".join(["Escaped\\_Section\\_Name"] * 12)
+        raw = [{"text": _HIGH_EXPANSION * 30, "heading": heading}]
+        for chunk in compose_chunks(raw, "Doc", ""):
+            assert count_wordpieces(chunk["text"]) <= MAX_WORDPIECES
 
 
 class TestBuildHeader:
