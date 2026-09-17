@@ -118,6 +118,29 @@ def pick_device() -> str:
     return "cpu"
 
 
+def release_device_cache(device: str) -> None:
+    """Free cached GPU buffers after an encode round-trip.
+
+    The MPS caching allocator keys blocks by tensor shape. Every encode batch
+    is padded to a different sequence length, so almost every batch creates a
+    new shape and the cache grows across the run instead of reusing memory.
+    Left alone it exhausts the MPS budget after ~18k chunks and the process
+    dies with "MPS backend out of memory". Releasing the cache after each
+    flush keeps it bounded at one flush's worth of buffers.
+    """
+    if device == "cpu":
+        return
+    try:
+        import torch
+
+        if device == "mps":
+            torch.mps.empty_cache()
+        elif device == "cuda":
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 def infer_product_area(path: Path) -> str:
     parts = path.relative_to(DOCS_ROOT).parts
     # parts[-1] is the filename; a file sitting directly under markdown/ has no area.
@@ -447,6 +470,7 @@ def main() -> None:
             normalize_embeddings=True,
             show_progress_bar=False,
         )
+        release_device_cache(device)
         collection.upsert(
             ids=pending_ids,
             embeddings=[e.tolist() for e in embeddings],
