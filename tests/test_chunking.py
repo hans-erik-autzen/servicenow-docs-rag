@@ -16,7 +16,9 @@ from chunk_and_index import (
     make_chunk_id,
     split_by_headings,
     split_on_blank_lines,
+    parse_args,
     parse_frontmatter_loosely,
+    parse_symref_head,
     _split_within,
 )
 
@@ -315,3 +317,18 @@ class TestMakeChunkId:
         result = make_chunk_id(_FAKE_PATH, 0)
         assert len(result) == 32
         assert all(c in "0123456789abcdef" for c in result)
+
+
+def test_parse_symref_head_reads_default_branch():
+    out = "ref: refs/heads/brazil\tHEAD\n753a7f0e8facb05a602b55fcb32ccba9a868c895\tHEAD\n"
+    assert parse_symref_head(out) == "brazil"
+
+
+def test_parse_symref_head_none_without_symref():
+    assert parse_symref_head("753a7f0e8facb05a602b55fcb32ccba9a868c895\tHEAD\n") is None
+    assert parse_symref_head("") is None
+
+
+def test_branch_flag_is_optional():
+    assert parse_args([]).branch is None
+    assert parse_args(["--branch", "australia"]).branch == "australia"

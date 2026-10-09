@@ -59,7 +59,7 @@ chmod +x install.sh
 `install.sh` will:
 
 1. Install `uv` if not already present
-2. Clone the ServiceNow docs (`australia` release branch) as a **sibling directory** next to this repo
+2. Clone the ServiceNow docs (the upstream default branch, i.e. the latest release — override with `DOCS_BRANCH=australia ./install.sh`) as a **sibling directory** next to this repo
 3. Install Python dependencies via `uv sync`
 4. Build the ChromaDB vector index — **expect roughly 40 minutes** (measured on an Apple M5 Pro with MPS acceleration; CPU-only machines will be slower)
 5. Write the MCP config block to `mcp_config.json` in the repo root

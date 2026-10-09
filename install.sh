@@ -4,7 +4,11 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 DOCS_DIR="$(dirname "$REPO_DIR")/servicenow-docs"
 DOCS_REPO="https://github.com/ServiceNow/ServiceNowDocs"
-DOCS_BRANCH="australia"
+# Release branch to index. Empty = the upstream default branch (the latest release).
+# Override with e.g.: DOCS_BRANCH=australia ./install.sh
+DOCS_BRANCH="${DOCS_BRANCH:-}"
+BRANCH_ARGS=()
+[[ -n "$DOCS_BRANCH" ]] && BRANCH_ARGS=(--branch "$DOCS_BRANCH")
 
 # Install uv if missing
 if ! command -v uv &>/dev/null; then
@@ -19,8 +23,8 @@ if [[ -d "$DOCS_DIR/.git" ]]; then
   echo "Updating ServiceNow docs..."
   git -C "$DOCS_DIR" pull
 else
-  echo "Cloning ServiceNow docs ($DOCS_BRANCH branch)..."
-  git clone --depth 1 --branch "$DOCS_BRANCH" "$DOCS_REPO" "$DOCS_DIR"
+  echo "Cloning ServiceNow docs (${DOCS_BRANCH:-default} branch)..."
+  git clone --depth 1 ${BRANCH_ARGS[@]+"${BRANCH_ARGS[@]}"} "$DOCS_REPO" "$DOCS_DIR"
 fi
 
 # Install Python dependencies
@@ -33,7 +37,7 @@ echo ""
 echo "Building ChromaDB index..."
 echo "(First run takes 10–30 minutes depending on your machine)"
 echo ""
-uv run python scripts/chunk_and_index.py
+uv run python scripts/chunk_and_index.py ${BRANCH_ARGS[@]+"${BRANCH_ARGS[@]}"}
 
 # Write MCP config to file
 MCP_CONFIG_FILE="$REPO_DIR/mcp_config.json"

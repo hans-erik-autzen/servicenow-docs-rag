@@ -10,6 +10,7 @@ that window is silently dropped by sentence-transformers, so `enforce_token_limi
 guarantees the cap holds rather than merely aiming for it.
 """
 
+import argparse
 import hashlib
 import json
 import re
@@ -90,19 +91,62 @@ def count_wordpieces(text: str) -> int:
     return len(tok(text, add_special_tokens=True, truncation=False, verbose=False)["input_ids"])
 
 
+def _git(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(_DOCS_REPO), *args],
+        capture_output=True, text=True, timeout=timeout,
+    )
+
+
 def detect_release_family() -> str:
     """Read the checked-out branch of the docs repo instead of hardcoding it."""
     try:
-        proc = subprocess.run(
-            ["git", "-C", str(_DOCS_REPO), "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, timeout=10,
-        )
+        proc = _git("rev-parse", "--abbrev-ref", "HEAD", timeout=10)
         branch = proc.stdout.strip()
         if proc.returncode == 0 and branch and branch != "HEAD":
             return branch
     except Exception:
         pass
     return DEFAULT_RELEASE
+
+
+def parse_symref_head(ls_remote_output: str) -> str | None:
+    """Extract the branch from `git ls-remote --symref origin HEAD` output."""
+    for line in ls_remote_output.splitlines():
+        if line.startswith("ref: refs/heads/") and line.endswith("\tHEAD"):
+            return line[len("ref: refs/heads/"):-len("\tHEAD")]
+    return None
+
+
+def remote_default_branch() -> str | None:
+    """
+    Ask GitHub which branch is the default — upstream moves it to each new release.
+
+    The local clone is shallow and single-branch, so its own origin/HEAD is frozen at
+    whatever was cloned and cannot be trusted. None when the remote is unreachable.
+    """
+    try:
+        proc = _git("ls-remote", "--symref", "origin", "HEAD")
+    except Exception:
+        return None
+    return parse_symref_head(proc.stdout) if proc.returncode == 0 else None
+
+
+def checkout_release(branch: str) -> None:
+    """Fetch and switch the docs repo to `branch`. The indexer reads files from disk."""
+    print(f"Switching docs repo to '{branch}'…", flush=True)
+    steps = [
+        # Single-branch clones only fetch the branch they were cloned with.
+        ("remote", "set-branches", "--add", "origin", branch),
+        ("fetch", "--depth", "1", "origin", branch),
+        ("checkout", "-B", branch, f"origin/{branch}"),
+    ]
+    for step in steps:
+        proc = _git(*step, timeout=600)
+        if proc.returncode != 0:
+            raise SystemExit(
+                f"git {' '.join(step)} failed in {_DOCS_REPO}:\n{proc.stderr.strip()}"
+            )
 
 
 def pick_device() -> str:
@@ -121,12 +165,9 @@ def pick_device() -> str:
 def release_device_cache(device: str) -> None:
     """Free cached GPU buffers after an encode round-trip.
 
-    The MPS caching allocator keys blocks by tensor shape. Every encode batch
-    is padded to a different sequence length, so almost every batch creates a
-    new shape and the cache grows across the run instead of reusing memory.
-    Left alone it exhausts the MPS budget after ~18k chunks and the process
-    dies with "MPS backend out of memory". Releasing the cache after each
-    flush keeps it bounded at one flush's worth of buffers.
+    This returns the caching allocator's free blocks, but it does not touch the
+    per-shape buffers MPS holds outside that allocator — those are bounded by
+    bucketing the padded sequence length in main(), not by this.
     """
     if device == "cpu":
         return
@@ -407,9 +448,19 @@ def delete_paths(collection, paths: list[str]) -> int:
     return removed
 
 
-def main() -> None:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
+    parser.add_argument(
+        "--branch",
+        help="Docs release branch to index (e.g. 'australia'). Defaults to the "
+             "upstream repo's default branch, i.e. the latest release.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
     global _release_family
-    _release_family = detect_release_family()
+    args = parse_args(argv)
 
     if not DOCS_ROOT.is_dir():
         raise SystemExit(
@@ -417,9 +468,23 @@ def main() -> None:
             "Run ./install.sh, or clone ServiceNow/ServiceNowDocs next to this repo."
         )
 
+    target = args.branch or remote_default_branch()
+    if target is None:
+        print("Could not reach the docs remote; indexing the checked-out branch.", flush=True)
+    elif target != detect_release_family():
+        checkout_release(target)
+    _release_family = detect_release_family()
+    print(f"Indexing release '{_release_family}'", flush=True)
+
     device = pick_device()
     print(f"Loading embedding model ({EMBED_MODEL}) on {device}…", flush=True)
     model = SentenceTransformer(EMBED_MODEL, device=device)
+    # Pad every batch to a multiple of 64 so at most 8 sequence shapes ever reach the
+    # device. MPS keeps per-shape buffers that empty_cache() does not reclaim; with the
+    # default pad-to-longest, nearly every batch is a new shape and driver memory grew
+    # ~2 GiB per flush until the run died. Bucketed, it plateaus (measured 82 GiB vs
+    # 8 GiB over 40 flushes). Padding is masked out, so embeddings are unchanged.
+    model[0].processing_kwargs = {"text": {"pad_to_multiple_of": 64}}
     # Chunking verifies against the model's own vocabulary, not a second downloaded copy.
     set_wordpiece_tokenizer(model.tokenizer)
 
@@ -489,7 +554,10 @@ def main() -> None:
             toc_skipped += 1
             continue
 
-        current_hash = file_md5(file_path)
+        # The release is folded in so switching branches re-indexes files whose content
+        # is identical across releases; otherwise they would keep the old release's
+        # release_family and source_url metadata.
+        current_hash = f"{_release_family}:{file_md5(file_path)}"
         seen_before = rel_str in hash_registry
 
         if hash_registry.get(rel_str) == current_hash:
